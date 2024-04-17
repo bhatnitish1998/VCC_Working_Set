@@ -5,14 +5,14 @@ const size_t memory_size = 0x20000000; // 512 MB
 
 // Page table configuration
 const uint32_t pd_addr = 0xA00000; // Page directory address (at 10 MB)
-const uint32_t pt_addr = 0xA01000; // Start of page tables (4KB from directory)
+const uint32_t pt_addr = 0xA10000; // Start of page tables (4KB from directory)
 const uint32_t page_size = 0x1000;  // 4KB
+const uint32_t stack_pointer = 128 << 20; // at 128 MB
 
 
 // Hyper call port numbers
 const uint32_t hc_print_32_bit = 0xE1;
 const uint32_t hc_read_32_bit = 0xE2;
-const uint32_t hc_print_string = 0xE3;
 
 // Guest binary
 char * guest_binary = "guest.bin";
@@ -132,8 +132,11 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
         pt[i] = (i * page_size) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
     }
 
-    // set up page directory (2nd level)
-    pd[0] = (pt_addr) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
+    // Set up page directory entries for page tables
+    size_t num_page_tables = memory_size / (page_size * 1024 * 4); // Each page table covers 4MB
+    for (size_t i = 0; i < num_page_tables; ++i) {
+        pd[i] = (pt_addr + i * 0x1000) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
+    }
 
     // set page table related registers
     sregs->cr3 = pd_addr;
@@ -143,7 +146,7 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
     sregs->efer = 0;
 }
 
-int run_vm(struct vm *vm, struct vcpu *vcpu) {
+int run_vm(struct vcpu *vcpu) {
 
     //variables to track number of guest exits
     u_int32_t num_exits = 0;
@@ -170,26 +173,13 @@ int run_vm(struct vm *vm, struct vcpu *vcpu) {
                     printf("%u\n", *output);
                     continue;
 
-                    // Read 32-bit integer
+                // Read 32-bit integer
                 } else if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_IN
                            && vcpu->kvm_run->io.port == hc_read_32_bit) {
-                    printf("Exits %d\n",num_exits);
                     // write value to the location given by the offset.
                     char *res = (char *) vcpu->kvm_run + vcpu->kvm_run->io.data_offset;
                     u_int32_t *input = (u_int32_t *) res;
                     *input = num_exits;
-                    continue;
-
-                    // Print string
-                } else if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
-                           && vcpu->kvm_run->io.port == hc_print_string) {
-                    // get a pointer to the starting address of the string
-                    char *res = (char *) vcpu->kvm_run + vcpu->kvm_run->io.data_offset;
-                    u_int32_t addr = *(u_int32_t *) res;
-                    char *to_read = (char *) vm->mem + addr;
-                    // print until end of the string character by character.
-                    while (*to_read != '\0')
-                        printf("%c", *to_read++);
                     continue;
                 }
 
@@ -253,7 +243,7 @@ void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu)
     memset(&regs, 0, sizeof(regs));
     regs.rflags = 2; // last but 1 bit is always set.
     regs.rip = 0;
-    regs.rsp = 2 << 20;
+    regs.rsp = stack_pointer;
 
     if (ioctl(vcpu->vcpu_fd, KVM_SET_REGS, &regs) < 0) {
         perror("KVM_SET_REGS");
@@ -261,7 +251,7 @@ void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu)
     }
 
     load_binary(vm,guest_binary);
-    run_vm(vm, vcpu);
+    run_vm(vcpu);
 }
 
 
