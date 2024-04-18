@@ -9,13 +9,15 @@ const uint32_t pt_addr = 0xA10000; // Start of page tables (4KB from directory)
 const uint32_t page_size = 0x1000;  // 4KB
 const uint32_t stack_pointer = 128 << 20; // at 128 MB
 
-
 // Hyper call port numbers
 const uint32_t hc_print_32_bit = 0xE1;
 const uint32_t hc_read_32_bit = 0xE2;
 
 // Write value to VM
 int write_value = 50;
+
+// interrupt parameters
+const int time_interval = 1;
 
 // Guest binary
 char *guest_binary = "guest.bin";
@@ -150,10 +152,8 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
 }
 
 void kvm_run_once(struct vcpu *vcpu) {
-    if (ioctl(vcpu->vcpu_fd, KVM_RUN, 0) < 0) {
-        perror("KVM_RUN");
-        exit(1);
-    }
+
+    int sc = ioctl(vcpu->vcpu_fd,KVM_RUN,0);
 
     switch (vcpu->kvm_run->exit_reason) {
         case KVM_EXIT_HLT:
@@ -194,11 +194,57 @@ void kvm_run_once(struct vcpu *vcpu) {
                     vcpu->kvm_run->exit_reason, KVM_EXIT_HLT);
             exit(1);
     }
+
+    if (sc < 0 && vcpu->kvm_run->exit_reason != KVM_EXIT_INTR)
+    {
+        fprintf(stderr, "Failed running vm\n");
+        exit(1);
+    }
 }
 
 _Noreturn void run_vm(struct vcpu *vcpu) {
+    // create timer
+    struct sigevent sev;
+    timer_t timerid;
+    struct itimerspec  its;
+
+    sev.sigev_notify = SIGEV_SIGNAL;
+    sev.sigev_signo = SIGALRM;
+    sev.sigev_value.sival_ptr = &timerid;
+    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1)
+        perror("timer create");
+
+    // block the signal
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGALRM);
+    if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1)
+        perror("sigprocmask");
+
+    // ioctl call to unmask in VMX mode
+    struct kvm_signal_mask kmask;
+    kmask.len=sizeof(unsigned long);
+    sigemptyset((sigset_t *)kmask.sigset);
+
+    ioctl(vcpu->vcpu_fd,KVM_SET_SIGNAL_MASK,&kmask);
+
+    // start timer with interval of 1 sec
+    its.it_value.tv_sec = time_interval;
+    its.it_value.tv_nsec = 0;
+    its.it_interval.tv_sec = time_interval;
+    its.it_interval.tv_nsec = 0;
+    if (timer_settime(timerid, 0, &its, NULL) == -1)
+        perror("timer_settime");
+
+
     while (1) {
         kvm_run_once(vcpu);
+
+        // handle the signal
+        sigset_t to_check;
+        int sig;
+        sigaddset(&to_check,SIGALRM);
+        sigwait(&to_check,&sig);
     }
 }
 

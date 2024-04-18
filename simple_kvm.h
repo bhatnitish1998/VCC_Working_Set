@@ -11,6 +11,9 @@
 #include <string.h>
 #include <stdint.h>
 #include <linux/kvm.h>
+#include <signal.h>
+#include <time.h>
+#include <string.h>
 
 /* CR0 bits */
 #define CR0_PE 1u
