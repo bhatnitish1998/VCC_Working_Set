@@ -73,13 +73,15 @@ struct vcpu {
 
 
 // function definitions
+void print_memory(size_t bytes);
+size_t get_working_set_size (struct vm * vm ,uint32_t sample_size);
 void vm_init(struct vm *vm, size_t mem_size);
 void vcpu_init(struct vm *vm, struct vcpu *vcpu);
 static void setup_protected_mode(struct kvm_sregs *sregs);
 static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs);
 void kvm_run_once(struct vcpu * vcpu);
 
-_Noreturn void run_vm(struct vcpu *vcpu);
+_Noreturn void run_vm(struct vm *vm,struct vcpu *vcpu);
 void load_binary(struct vm *vm, char *binary_file);
 void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu);
 

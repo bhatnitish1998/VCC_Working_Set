@@ -9,6 +9,8 @@ const uint32_t pt_addr = 0xA10000; // Start of page tables (4KB from directory)
 const uint32_t page_size = 0x1000;  // 4KB
 const uint32_t stack_pointer = 128 << 20; // at 128 MB
 
+const uint32_t num_pages = memory_size/page_size;
+
 // Hyper call port numbers
 const uint32_t hc_print_32_bit = 0xE1;
 const uint32_t hc_read_32_bit = 0xE2;
@@ -17,10 +19,46 @@ const uint32_t hc_read_32_bit = 0xE2;
 int write_value = 50;
 
 // interrupt parameters
-const int time_interval = 1;
+const int time_interval = 5;
 
 // Guest binary
 char *guest_binary = "guest.bin";
+
+void print_memory(size_t bytes) {
+    if ((bytes / 1024) <= 1) {
+        printf("%lu bytes", bytes);
+        return;
+    }
+    bytes = bytes / 1024;
+    if ((bytes / 1024) <= 1) {
+        printf("%lu KB", bytes);
+        return;
+    }
+    bytes = bytes / 1024;
+    if ((bytes / 1024) <= 1) {
+        printf("%lu MB", bytes);
+        return;
+    }
+}
+
+size_t get_working_set_size (struct vm * vm ,uint32_t sample_size)
+{
+    // get how many pages of sample_size were accessed
+    uint32_t distance = num_pages / sample_size;
+    uint32_t *pt = (void *) (vm->mem + pt_addr);
+    int count = 0;
+    for (uint32_t i = 0; i < num_pages; i += distance) {
+        if (pt[i] & PTE32_ACCESSED) {
+            pt[i] = pt[i] & ~(PTE32_ACCESSED);
+            count++;
+        }
+    }
+
+    // estimate working set size;
+    double ratio = (double)count/sample_size;
+    size_t memory_estimate = (size_t)(ratio * num_pages) * page_size;
+    return memory_estimate;
+}
 
 
 void vm_init(struct vm *vm, size_t mem_size) {
@@ -133,14 +171,14 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
     uint32_t *pt = (void *) (vm->mem + pt_addr);
 
     // Set up page tables
-    for (int i = 0; i < (memory_size / page_size); ++i) {
+    for (int i = 0; i < num_pages; ++i) {
         pt[i] = (i * page_size) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
     }
 
     // Set up page directory entries for page tables
-    size_t num_page_tables = memory_size / (page_size * 1024 * 4); // Each page table covers 4MB
+    size_t num_page_tables = num_pages/page_size; // Each page table covers 4MB
     for (size_t i = 0; i < num_page_tables; ++i) {
-        pd[i] = (pt_addr + i * 0x1000) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
+        pd[i] = (pt_addr + i * page_size) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
     }
 
     // set page table related registers
@@ -202,7 +240,7 @@ void kvm_run_once(struct vcpu *vcpu) {
     }
 }
 
-_Noreturn void run_vm(struct vcpu *vcpu) {
+_Noreturn void run_vm(struct vm *vm, struct vcpu *vcpu) {
     // create timer
     struct sigevent sev;
     timer_t timerid;
@@ -239,6 +277,12 @@ _Noreturn void run_vm(struct vcpu *vcpu) {
 
     while (1) {
         kvm_run_once(vcpu);
+
+        // Calculate Working set size
+        size_t wss = get_working_set_size(vm,1000);
+        printf("Working Set Size :");
+        print_memory(wss);
+        printf("\n");
 
         // handle the signal
         sigset_t to_check;
@@ -302,7 +346,7 @@ void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu) {
     }
 
     load_binary(vm, guest_binary);
-    run_vm(vcpu);
+    run_vm(vm,vcpu);
 }
 
 
