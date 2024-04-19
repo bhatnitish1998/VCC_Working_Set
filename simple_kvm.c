@@ -38,6 +38,8 @@ int time_span []={12,12,12,12,12};
 int num_pattern = 5;
 int pattern_index =0;
 
+// Invalidation
+uint32_t invalid_page_count =0;
 
 void print_memory(size_t bytes) {
     if ((bytes / 1024) <= 1) {
@@ -78,6 +80,35 @@ size_t get_wss_accessed_bit(struct vm *vm, uint32_t sample_sz) {
     double ratio = (double) count / sample_sz;
     size_t memory_estimate = (size_t) (ratio * num_pages) * page_size;
     return memory_estimate;
+}
+
+size_t get_wss_invalidation (struct vm *vm, uint32_t sample_sz) {
+    double ratio = (double) invalid_page_count / sample_sz;
+    size_t memory_estimate = (size_t) (ratio * num_pages) * page_size;
+    invalid_page_count = 0;
+
+    // Invalidate sample pages
+    uint32_t distance = num_pages / sample_sz;
+    uint32_t *pt = (void *) (vm->mem + pt_addr);
+    for (uint32_t i = 0; i < num_pages; i += distance) {
+        pt[i] = pt[i] & ~(PTE32_PRESENT);
+    }
+    return memory_estimate;
+}
+
+void handle_pgfault (struct vm *vm, struct vcpu * vcpu)
+{
+    struct kvm_sregs sregs;
+    if (ioctl(vcpu->vcpu_fd, KVM_GET_SREGS, &sregs) < 0) {
+        perror("KVM_GET_SREGS");
+        exit(1);
+    }
+    uint32_t address = sregs.cr2;
+
+    uint32_t *pt = (void *) (vm->mem + pt_addr);
+    uint32_t  page_num = address/4096;
+    pt[page_num] = pt[page_num] | PTE32_PRESENT;
+    invalid_page_count ++;
 }
 
 void vm_init(struct vm *vm, size_t mem_size) {
@@ -208,7 +239,7 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
     sregs->efer = 0;
 }
 
-void kvm_run_once(struct vcpu *vcpu) {
+void kvm_run_once(struct vm *vm, struct vcpu *vcpu) {
     int sc = ioctl(vcpu->vcpu_fd, KVM_RUN, 0);
 
     switch (vcpu->kvm_run->exit_reason) {
@@ -238,8 +269,8 @@ void kvm_run_once(struct vcpu *vcpu) {
             }
 
         case KVM_EXIT_SHUTDOWN:
-            fprintf(stderr, "KVM SHUTDOWN\n");
-            exit(1);
+            handle_pgfault(vm,vcpu);
+            break;
 
         case KVM_EXIT_INTR:
             printf("KVM Interrupted \n");
@@ -307,11 +338,12 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
     write_to_memory(vm, 100, mem_rand_perc_addr);
 
     while (1) {
-        kvm_run_once(vcpu);
+        kvm_run_once(vm,vcpu);
 
         // Calculate Working set size
         if (sample_signal == 1) {
-            size_t wss = get_wss_accessed_bit(vm, sample_size);
+            //size_t wss = get_wss_accessed_bit(vm, sample_size);
+            size_t wss = get_wss_invalidation(vm,sample_size);
             printf("Working Set Size :");
             print_memory(wss);
             printf("\n");
