@@ -4,25 +4,27 @@
 const size_t memory_size = 0x20000000; // 512 MB
 
 // Page table configuration
-const uint32_t pd_addr = 0xA00000; // Page directory address (at 10 MB)
-const uint32_t pt_addr = 0xA10000; // Start of page tables (4KB from directory)
+const uint32_t pd_addr = 0x500000; // Page directory address (at 5 MB)
+const uint32_t pt_addr = 0x600000; // Start of page tables  (at 6 MB)
 const uint32_t page_size = 0x1000;  // 4KB
-const uint32_t stack_pointer = 128 << 20; // at 128 MB
-
+const uint32_t stack_pointer = 0x20000000; // at end
 const uint32_t num_pages = memory_size/page_size;
 
-// Hyper call port numbers
+// guest parameter memory location
+uint32_t mem_access_size_addr = 0xA00000; // Memory usage parameter off guest (at 10 MB)
+uint32_t mem_random_addr = 0xA00008; // Percentage of memory access that should be random
+uint32_t overflow_counter_addr = 0xA00010; // To track performance of guest
+
+// Hyper call info (if needed)
 const uint32_t hc_print_32_bit = 0xE1;
 const uint32_t hc_read_32_bit = 0xE2;
 
-// Write value to VM
-int write_value = 50;
-
-// interrupt parameters
-const int time_interval = 5;
-
 // Guest binary
 char *guest_binary = "guest.bin";
+
+// Sampling parameters
+uint32_t sample_interval = 5;
+uint32_t mem_pattern_change_interval = 12;
 
 void print_memory(size_t bytes) {
     if ((bytes / 1024) <= 1) {
@@ -41,9 +43,9 @@ void print_memory(size_t bytes) {
     }
 }
 
-size_t get_working_set_size (struct vm * vm ,uint32_t sample_size)
+size_t get_wss_accessed_bit (struct vm * vm ,uint32_t sample_size)
 {
-    // get how many pages of sample_size were accessed
+    // Calculate ratio of pages access from sample. sampling is done uniformly.
     uint32_t distance = num_pages / sample_size;
     uint32_t *pt = (void *) (vm->mem + pt_addr);
     int count = 0;
@@ -59,7 +61,6 @@ size_t get_working_set_size (struct vm * vm ,uint32_t sample_size)
     size_t memory_estimate = (size_t)(ratio * num_pages) * page_size;
     return memory_estimate;
 }
-
 
 void vm_init(struct vm *vm, size_t mem_size) {
     // Task State Segment address
@@ -175,8 +176,8 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
         pt[i] = (i * page_size) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
     }
 
-    // Set up page directory entries for page tables
-    size_t num_page_tables = num_pages/page_size; // Each page table covers 4MB
+    // Set up page directory (2nd level) entries for page tables
+    size_t num_page_tables = (num_pages * 4) / page_size; // each entry is 4 byte and covers 4MB memory.
     for (size_t i = 0; i < num_page_tables; ++i) {
         pd[i] = (pt_addr + i * page_size) | PTE32_PRESENT | PTE32_RW | PTE32_USER;
     }
@@ -190,13 +191,13 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
 }
 
 void kvm_run_once(struct vcpu *vcpu) {
-
     int sc = ioctl(vcpu->vcpu_fd,KVM_RUN,0);
 
     switch (vcpu->kvm_run->exit_reason) {
         case KVM_EXIT_HLT:
             printf("VM Halted\n");
             exit(1);
+
         case KVM_EXIT_IO:
             // Print 32-bit integer
             if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_OUT
@@ -206,11 +207,11 @@ void kvm_run_once(struct vcpu *vcpu) {
                 u_int32_t *output = (u_int32_t *) res;
                 printf("Print number : %u\n", *output);
                 break;
-
                 // Read 32-bit integer
             } else if (vcpu->kvm_run->io.direction == KVM_EXIT_IO_IN
                        && vcpu->kvm_run->io.port == hc_read_32_bit) {
                 // write value to the location given by the offset.
+                int write_value = 50;
                 char *res = (char *) vcpu->kvm_run + vcpu->kvm_run->io.data_offset;
                 u_int32_t *input = (u_int32_t *) res;
                 *input = write_value;
@@ -227,8 +228,7 @@ void kvm_run_once(struct vcpu *vcpu) {
             break;
 
         default:
-            fprintf(stderr, "Got exit_reason %d,"
-                            " expected KVM_EXIT_HLT (%d)\n",
+            fprintf(stderr, "Got exit_reason %d, expected KVM_EXIT_HLT (%d)\n",
                     vcpu->kvm_run->exit_reason, KVM_EXIT_HLT);
             exit(1);
     }
@@ -267,9 +267,9 @@ _Noreturn void run_vm(struct vm *vm, struct vcpu *vcpu) {
     ioctl(vcpu->vcpu_fd,KVM_SET_SIGNAL_MASK,&kmask);
 
     // start timer with interval of 1 sec
-    its.it_value.tv_sec = time_interval;
+    its.it_value.tv_sec = sample_interval;
     its.it_value.tv_nsec = 0;
-    its.it_interval.tv_sec = time_interval;
+    its.it_interval.tv_sec = sample_interval;
     its.it_interval.tv_nsec = 0;
     if (timer_settime(timerid, 0, &its, NULL) == -1)
         perror("timer_settime");
@@ -279,7 +279,7 @@ _Noreturn void run_vm(struct vm *vm, struct vcpu *vcpu) {
         kvm_run_once(vcpu);
 
         // Calculate Working set size
-        size_t wss = get_working_set_size(vm,1000);
+        size_t wss = get_wss_accessed_bit(vm,1000);
         printf("Working Set Size :");
         print_memory(wss);
         printf("\n");
