@@ -21,10 +21,11 @@ long lcg_rand() {
 int increment_counter(int value)
 {
     value++;
-    if(value ==0)
+    if(value ==10000000)
     {
-        long k = *(long*) overflow_counter_addr;
-        *(long*) overflow_counter_addr =k+1;
+        long t = *(long*) overflow_counter_addr;
+        *(long*) overflow_counter_addr =t+1;
+        value =0;
     }
     return value;
 }
@@ -71,13 +72,13 @@ int main() {
             long addr = lcg_rand() % 0x20000;
             x = *(long *)(addr*0x1000);
             sum += x;
-            increment_counter(k);
+            k= increment_counter(k);
         }
 
         for( int j =0; j< contiguous_pages; j++) {
             x = *(long *) (begin + (j * 0x1000));
             sum+=x;
-            increment_counter(k);
+            k=increment_counter(k);
         }
 
         *(long *) result_location = sum;

@@ -12,7 +12,7 @@ const uint32_t num_pages = memory_size / page_size;
 
 // guest parameter memory location
 uint32_t mem_access_size_addr = 0xA00000; // Memory usage parameter off guest (at 10 MB)
-uint32_t mem_random_addr = 0xA00008; // Percentage of memory access that should be random
+uint32_t mem_rand_perc_addr = 0xA00008; // Percentage of memory access that should be random
 uint32_t overflow_counter_addr = 0xA00010; // To track performance of guest
 
 // Hyper call info (if needed)
@@ -30,6 +30,13 @@ uint32_t sample_size = 1000;
 // signal variables
 int sample_signal = 0;
 int pattern_signal = 0;
+int end_signal = 0;
+
+// workload
+uint32_t mem_pattern [] ={50, 150 , 100 , 200, 50};
+int time_span []={7,7,7,7,7};
+int num_pattern = 5;
+int pattern_index =0;
 
 void print_memory(size_t bytes) {
     if ((bytes / 1024) <= 1) {
@@ -46,6 +53,12 @@ void print_memory(size_t bytes) {
         printf("%lu MB", bytes);
         return;
     }
+}
+
+void write_to_memory (struct vm *vm, long value , uint32_t address)
+{
+    long *ptr = (long *)((char*)vm->mem + address);
+    *ptr = value;
 }
 
 size_t get_wss_accessed_bit(struct vm *vm, uint32_t sample_sz) {
@@ -248,6 +261,8 @@ static void handler(int sig) {
         sample_signal = 1;
     if (sig == SIGUSR2)
         pattern_signal = 1;
+    if (sig == SIGALRM)
+        end_signal =1;
 }
 
 void setup_timer (timer_t * timer_id, int signal, int interval)
@@ -268,20 +283,22 @@ void setup_timer (timer_t * timer_id, int signal, int interval)
         perror("timer_settime");
 }
 
-_Noreturn void run_vm(struct vm *vm, struct vcpu *vcpu) {
-
+void run_vm(struct vm *vm, struct vcpu *vcpu) {
     // establish handler
     struct sigaction sa;
     sa.sa_sigaction = (void (*)(int, siginfo_t *, void *)) handler;
     sigemptyset(&sa.sa_mask);
-    if (sigaction(SIGUSR1, &sa, NULL) == -1 || sigaction(SIGUSR2, &sa, NULL) == -1)
+    if (sigaction(SIGUSR1, &sa, NULL) == -1 || sigaction(SIGUSR2, &sa, NULL) == -1 || sigaction(SIGALRM, &sa, NULL) == -1)
         perror("sigaction");
 
     // create and setup timers
-    timer_t timer_sample , timer_pattern;
+    timer_t timer_sample , timer_pattern,timer_end;
     setup_timer(&timer_sample,SIGUSR1,5);
     setup_timer(&timer_pattern,SIGUSR2,12);
+    setup_timer(&timer_end,SIGALRM,60);
 
+    write_to_memory(vm,100,mem_access_size_addr);
+    write_to_memory(vm, 100, mem_rand_perc_addr);
 
     while (1) {
         kvm_run_once(vcpu);
@@ -292,13 +309,22 @@ _Noreturn void run_vm(struct vm *vm, struct vcpu *vcpu) {
             printf("Working Set Size :");
             print_memory(wss);
             printf("\n");
-
             sample_signal = 0;
         }
-        // Calculate Working set size
+
+        // Change guest access pattern
         if (pattern_signal == 1) {
-            printf("Change memory :\n");
+            write_to_memory(vm,100,mem_access_size_addr);
             pattern_signal = 0;
+        }
+        volatile long counter_value = *(long *)(vm->mem + overflow_counter_addr);
+        printf("Final counter overflows %ld\n",counter_value);
+
+        if(end_signal ==1)
+        {
+            long counter_value = *(long *)(vm->mem + overflow_counter_addr);
+            printf("Final counter overflows %ld",counter_value);
+            break;
         }
     }
 }
@@ -362,6 +388,7 @@ void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu) {
 
 
 int main() {
+
     // Initialize VM and VCPU
     struct vm vm;
     struct vcpu vcpu;
@@ -370,6 +397,10 @@ int main() {
 
     // Run VM in 32 bit paged mode.
     run_paged_32bit_mode(&vm, &vcpu);
+    long counter_value = *(long *)(vm.mem + overflow_counter_addr);
+    printf("Final counter overflows %ld",counter_value);
+
+    struct workload1;
 
     return 0;
 }
