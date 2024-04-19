@@ -8,7 +8,7 @@ const uint32_t pd_addr = 0x500000; // Page directory address (at 5 MB)
 const uint32_t pt_addr = 0x600000; // Start of page tables  (at 6 MB)
 const uint32_t page_size = 0x1000;  // 4KB
 const uint32_t stack_pointer = 0x20000000; // at end
-const uint32_t num_pages = memory_size/page_size;
+const uint32_t num_pages = memory_size / page_size;
 
 // guest parameter memory location
 uint32_t mem_access_size_addr = 0xA00000; // Memory usage parameter off guest (at 10 MB)
@@ -23,8 +23,13 @@ const uint32_t hc_read_32_bit = 0xE2;
 char *guest_binary = "guest.bin";
 
 // Sampling parameters
-uint32_t sample_interval = 5;
-uint32_t mem_pattern_change_interval = 12;
+int sample_interval = 5;
+int mem_pattern_change_interval = 12;
+uint32_t sample_size = 1000;
+
+// signal variables
+int sample_signal = 0;
+int pattern_signal = 0;
 
 void print_memory(size_t bytes) {
     if ((bytes / 1024) <= 1) {
@@ -43,10 +48,9 @@ void print_memory(size_t bytes) {
     }
 }
 
-size_t get_wss_accessed_bit (struct vm * vm ,uint32_t sample_size)
-{
+size_t get_wss_accessed_bit(struct vm *vm, uint32_t sample_sz) {
     // Calculate ratio of pages access from sample. sampling is done uniformly.
-    uint32_t distance = num_pages / sample_size;
+    uint32_t distance = num_pages / sample_sz;
     uint32_t *pt = (void *) (vm->mem + pt_addr);
     int count = 0;
     for (uint32_t i = 0; i < num_pages; i += distance) {
@@ -57,8 +61,8 @@ size_t get_wss_accessed_bit (struct vm * vm ,uint32_t sample_size)
     }
 
     // estimate working set size;
-    double ratio = (double)count/sample_size;
-    size_t memory_estimate = (size_t)(ratio * num_pages) * page_size;
+    double ratio = (double) count / sample_sz;
+    size_t memory_estimate = (size_t) (ratio * num_pages) * page_size;
     return memory_estimate;
 }
 
@@ -191,7 +195,7 @@ static void setup_paged_32bit_mode(struct vm *vm, struct kvm_sregs *sregs) {
 }
 
 void kvm_run_once(struct vcpu *vcpu) {
-    int sc = ioctl(vcpu->vcpu_fd,KVM_RUN,0);
+    int sc = ioctl(vcpu->vcpu_fd, KVM_RUN, 0);
 
     switch (vcpu->kvm_run->exit_reason) {
         case KVM_EXIT_HLT:
@@ -233,62 +237,69 @@ void kvm_run_once(struct vcpu *vcpu) {
             exit(1);
     }
 
-    if (sc < 0 && vcpu->kvm_run->exit_reason != KVM_EXIT_INTR)
-    {
+    if (sc < 0 && vcpu->kvm_run->exit_reason != KVM_EXIT_INTR) {
         fprintf(stderr, "Failed running vm\n");
         exit(1);
     }
 }
 
-_Noreturn void run_vm(struct vm *vm, struct vcpu *vcpu) {
-    // create timer
+static void handler(int sig) {
+    if (sig == SIGUSR1)
+        sample_signal = 1;
+    if (sig == SIGUSR2)
+        pattern_signal = 1;
+}
+
+void setup_timer (timer_t * timer_id, int signal, int interval)
+{
     struct sigevent sev;
-    timer_t timerid;
-    struct itimerspec  its;
-
     sev.sigev_notify = SIGEV_SIGNAL;
-    sev.sigev_signo = SIGALRM;
-    sev.sigev_value.sival_ptr = &timerid;
-    if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1)
-        perror("timer create");
+    sev.sigev_signo = signal;
+    sev.sigev_value.sival_ptr = timer_id;
+    if (timer_create(CLOCK_REALTIME, &sev, timer_id) == -1)
+        perror("timer_create");
 
-    // block the signal
-    sigset_t mask;
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGALRM);
-    if (sigprocmask(SIG_SETMASK, &mask, NULL) == -1)
-        perror("sigprocmask");
-
-    // ioctl call to unmask in VMX mode
-    struct kvm_signal_mask kmask;
-    kmask.len=sizeof(unsigned long);
-    sigemptyset((sigset_t *)kmask.sigset);
-
-    ioctl(vcpu->vcpu_fd,KVM_SET_SIGNAL_MASK,&kmask);
-
-    // start timer with interval of 1 sec
-    its.it_value.tv_sec = sample_interval;
+    struct itimerspec its;
+    its.it_value.tv_sec = interval;
     its.it_value.tv_nsec = 0;
-    its.it_interval.tv_sec = sample_interval;
+    its.it_interval.tv_sec = interval;
     its.it_interval.tv_nsec = 0;
-    if (timer_settime(timerid, 0, &its, NULL) == -1)
+    if (timer_settime(*timer_id, 0, &its, NULL) == -1)
         perror("timer_settime");
+}
+
+_Noreturn void run_vm(struct vm *vm, struct vcpu *vcpu) {
+
+    // establish handler
+    struct sigaction sa;
+    sa.sa_sigaction = (void (*)(int, siginfo_t *, void *)) handler;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGUSR1, &sa, NULL) == -1 || sigaction(SIGUSR2, &sa, NULL) == -1)
+        perror("sigaction");
+
+    // create and setup timers
+    timer_t timer_sample , timer_pattern;
+    setup_timer(&timer_sample,SIGUSR1,5);
+    setup_timer(&timer_pattern,SIGUSR2,12);
 
 
     while (1) {
         kvm_run_once(vcpu);
 
         // Calculate Working set size
-        size_t wss = get_wss_accessed_bit(vm,1000);
-        printf("Working Set Size :");
-        print_memory(wss);
-        printf("\n");
+        if (sample_signal == 1) {
+            size_t wss = get_wss_accessed_bit(vm, sample_size);
+            printf("Working Set Size :");
+            print_memory(wss);
+            printf("\n");
 
-        // handle the signal
-        sigset_t to_check;
-        int sig;
-        sigaddset(&to_check,SIGALRM);
-        sigwait(&to_check,&sig);
+            sample_signal = 0;
+        }
+        // Calculate Working set size
+        if (pattern_signal == 1) {
+            printf("Change memory :\n");
+            pattern_signal = 0;
+        }
     }
 }
 
@@ -346,7 +357,7 @@ void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu) {
     }
 
     load_binary(vm, guest_binary);
-    run_vm(vm,vcpu);
+    run_vm(vm, vcpu);
 }
 
 
