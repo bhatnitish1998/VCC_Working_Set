@@ -34,9 +34,10 @@ int end_signal = 0;
 
 // workload
 uint32_t mem_pattern [] ={50, 150 , 100 , 200, 50};
-int time_span []={7,7,7,7,7};
+int time_span []={12,12,12,12,12};
 int num_pattern = 5;
 int pattern_index =0;
+
 
 void print_memory(size_t bytes) {
     if ((bytes / 1024) <= 1) {
@@ -265,14 +266,17 @@ static void handler(int sig) {
         end_signal =1;
 }
 
-void setup_timer (timer_t * timer_id, int signal, int interval)
+void setup_timer (timer_t * timer_id, int signal, int interval,int new)
 {
-    struct sigevent sev;
-    sev.sigev_notify = SIGEV_SIGNAL;
-    sev.sigev_signo = signal;
-    sev.sigev_value.sival_ptr = timer_id;
-    if (timer_create(CLOCK_REALTIME, &sev, timer_id) == -1)
-        perror("timer_create");
+    if(new ==1)
+    {
+        struct sigevent sev;
+        sev.sigev_notify = SIGEV_SIGNAL;
+        sev.sigev_signo = signal;
+        sev.sigev_value.sival_ptr = timer_id;
+        if (timer_create(CLOCK_REALTIME, &sev, timer_id) == -1)
+            perror("timer_create");
+    }
 
     struct itimerspec its;
     its.it_value.tv_sec = interval;
@@ -293,11 +297,13 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
 
     // create and setup timers
     timer_t timer_sample , timer_pattern,timer_end;
-    setup_timer(&timer_sample,SIGUSR1,5);
-    setup_timer(&timer_pattern,SIGUSR2,12);
-    setup_timer(&timer_end,SIGALRM,60);
+    setup_timer(&timer_sample,SIGUSR1,5,1);
+    setup_timer(&timer_pattern,SIGUSR2,time_span[pattern_index],1);
+    setup_timer(&timer_end,SIGALRM,60,1);
 
-    write_to_memory(vm,100,mem_access_size_addr);
+    write_to_memory(vm,mem_pattern[pattern_index],mem_access_size_addr);
+    pattern_index++;
+
     write_to_memory(vm, 100, mem_rand_perc_addr);
 
     while (1) {
@@ -314,11 +320,13 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
 
         // Change guest access pattern
         if (pattern_signal == 1) {
-            write_to_memory(vm,100,mem_access_size_addr);
+            if(pattern_index <= num_pattern)
+            {
+                write_to_memory(vm,mem_pattern[pattern_index],mem_access_size_addr);
+                pattern_index++;
+            }
             pattern_signal = 0;
         }
-        volatile long counter_value = *(long *)(vm->mem + overflow_counter_addr);
-        printf("Final counter overflows %ld\n",counter_value);
 
         if(end_signal ==1)
         {
