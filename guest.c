@@ -1,12 +1,7 @@
 #include <stdint.h>
 
-long result_location = 0x1600000; // 25 MB
-long begin = 50 *1024*1024 ; // 50 MB
-uint32_t mem_access_size_addr = 0xA00000;
-uint32_t mem_random_addr = 0xA00008; // Percentage of memory access that should be random
-uint32_t overflow_counter_addr = 0xA00010; // To track performance of guest
-uint32_t randomness_addr = 0xA00018; // 0 for contiguous 1 for random access.
-
+// Random number generator for random memory access
+// LCG Parameters
 const long long a = 1103515245;
 const long long c = 12345;
 const long long m = 2147483648;
@@ -18,70 +13,82 @@ long lcg_rand() {
     return rand;
 }
 
-int increment_counter(int value)
-{
-    value++;
-    if(value ==10000000)
-    {
-        long t = *(long*) overflow_counter_addr;
-        *(long*) overflow_counter_addr =t+1;
-        value =0;
-    }
+// guest parameter memory location
+uint32_t mem_access_size_mb_addr = 0xA00000; // Memory usage parameter off guest (at 10 MB)
+uint32_t mem_rand_perc_addr = 0xA00008; // Percentage of memory access that should be random
+uint32_t overflow_counter_addr = 0xA00010; // To track performance of guest
+
+// memory locations
+long dummy_location = 0xB00000; // Write to prevent compiler optimization (at 11 MB)
+long begin = 0x1900000 ; // Start address for contiguous memory test.
+
+// helper functions
+long read_from_memory(uint32_t addr) {
+    long value = *(long *) addr;
     return value;
 }
 
-void hc_print_32_bit(uint32_t val) {
-    asm("outl %0,%1" : /* empty */ : "a" (val), "Nd" (0xE1) : "memory");
+void write_to_memory(long value, uint32_t addr) {
+    *(long *) addr = value;
 }
 
-uint32_t hc_read_32_bit() {
-    uint32_t value;
-    asm("inl %1,%0" :"=a" (value) : "Nd" (0xE2) : "memory");
+// Increment the counter variable and increase overflow on reaching a million
+int increment_counter(int value) {
+    value++;
+    if (value == 1000000) {
+        long temp = read_from_memory(overflow_counter_addr);
+        write_to_memory(temp+1,overflow_counter_addr);
+        value = 0;
+    }
     return value;
 }
 
 int main() {
 
-    *(long*) overflow_counter_addr =0;
+    write_to_memory(0,overflow_counter_addr);
     int k =0;
 
+    // infinitely access memory based on parameters.
     while(1)
     {
-        volatile long mem_pages = (*((long*) mem_access_size_addr))*1024 /4;
-        volatile long rand_percent = *(long*) mem_random_addr;
+        // get access pattern from fixed locations
+        volatile long mem_size_mb = read_from_memory(mem_access_size_mb_addr);
+        volatile long mem_pages = mem_size_mb * 1024 / 4;
+        volatile long rand_percent = read_from_memory(mem_rand_perc_addr);
 
-        long random_pages;
-        long contiguous_pages;
-        if(rand_percent !=0)
-        {
-            random_pages = (mem_pages * rand_percent)/100;
+        // determine number of random and contiguous pages to access
+        long random_pages, contiguous_pages;
+        if (rand_percent != 0) {
+            random_pages = (mem_pages * rand_percent) / 100;
             contiguous_pages = mem_pages - random_pages;
-        }
-        else
-        {
-            random_pages =0;
-            contiguous_pages =mem_pages;
+        } else {
+            random_pages = 0;
+            contiguous_pages = mem_pages;
         }
 
+        // Memory Workload
         long x;
         long sum =0;
-
         seed =123456789;
-        for( int i =0; i< random_pages; i++)
-        {
+
+        // access random pages and increment counter.
+        for (int i = 0; i < random_pages; i++) {
             long addr = lcg_rand() % 0x20000;
-            x = *(long *)(addr*0x1000);
+            x = read_from_memory(addr * 0x1000);
             sum += x;
-            k= increment_counter(k);
+            k = increment_counter(k);
         }
 
-        for( int j =0; j< contiguous_pages; j++) {
-            x = *(long *) (begin + (j * 0x1000));
-            sum+=x;
-            k=increment_counter(k);
+        // access contiguous pages and increment counter
+        for (int j = 0; j < contiguous_pages; j++) {
+            x = read_from_memory(begin + (j * 0x1000));
+            sum += x;
+            k = increment_counter(k);
         }
 
-        *(long *) result_location = sum;
+        // write to dummy location to avoid compiler optimization
+        write_to_memory(sum,dummy_location);
     }
+
     return 0;
 }
