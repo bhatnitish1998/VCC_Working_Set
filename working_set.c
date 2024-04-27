@@ -1,43 +1,28 @@
 #include "simple_kvm_setup.h"
 #include "memory_helper.h"
 #include "timer_and_signals_helper.h"
-
+#include "file_helper.h"
 
 // Sampling parameters
-int sample_interval = 5;
-int sample_size = 1000;
+int sample_interval;
+int sample_size;
+
+// experiment parameters
 int random_percent;
-bool method;
+int experiment_duration;
+bool estimation_method;
 
-// workload
-int mem_pattern[30];
-int time_span[30];
-int num_pattern = 0;
-int pattern_index = 0;
+// workload data structures
+int workload_mem_size[30];
+int workload_mem_duration[30];
+int workload_entries = 0;
+int workload_current = 0;
 
-int read_workload(const char *filename, int access_size[], int duration[]) {
-    FILE *file = fopen(filename, "r");
-    if (file == NULL) {
-        printf("Error opening file.\n");
-        return 0;
-    }
-
-    int rows =0;
-    // Skip the first line (header)
-    char line[100];
-    fgets(line, sizeof(line), file);
-
-    // Read the rest of the file
-    while (fscanf(file, "%d %d", &access_size[rows], &duration[rows]) == 2) {
-        rows++;
-    }
-    fclose(file);
-
-    return rows;
-}
+// variables for graph
+int global_time;
 
 size_t get_wss_accessed_bit(struct vm *vm, uint32_t sample_sz) {
-    // Calculate ratio of pages access from sample. sampling is done uniformly.
+    // Calculate ratio of pages accessed from sample. sampling is done uniformly.
     uint32_t distance = num_pages / sample_sz;
     uint32_t *pt = (void *) (vm->mem + pt_addr);
     int count = 0;
@@ -70,16 +55,20 @@ size_t get_wss_invalidation(struct vm *vm, uint32_t sample_sz) {
 
 void run_vm(struct vm *vm, struct vcpu *vcpu) {
 
+    // print header
+    printf("Time\tWSS\tCounter\n");
+
     register_handler();
+
     // create and setup timers
     timer_t timer_sample, timer_pattern, timer_end;
-    setup_timer(&timer_sample, SIGUSR1, 5, 1);
-    setup_timer(&timer_pattern, SIGUSR2, time_span[pattern_index], 1);
-    setup_timer(&timer_end, SIGALRM, 60, 1);
+    setup_timer(&timer_sample, SIGUSR1, sample_interval, 1);
+    setup_timer(&timer_pattern, SIGUSR2, workload_mem_duration[workload_current], 1);
+    setup_timer(&timer_end, SIGALRM, experiment_duration, 1);
 
-    write_to_vm_memory(vm, mem_pattern[pattern_index], mem_access_size_mb_addr);
-    pattern_index++;
-
+    // set initial guest parameters
+    write_to_vm_memory(vm, workload_mem_size[workload_current], mem_access_size_mb_addr);
+    workload_current++;
     write_to_vm_memory(vm, random_percent, mem_rand_perc_addr);
 
     while (1) {
@@ -87,34 +76,43 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
 
         // Calculate Working set size
         if (sample_signal == 1) {
-            //size_t wss = get_wss_accessed_bit(vm, sample_size);
-            size_t wss = get_wss_invalidation(vm, sample_size);
-            printf("Working Set Size :");
+            // Access bit method or invalidation method.
+            size_t wss;
+            if(estimation_method == 0)
+                wss = get_wss_accessed_bit(vm, sample_size);
+            else
+                wss = get_wss_invalidation(vm, sample_size);
+
+
+            // print details
+            global_time+=sample_interval;
+            long counter_value = read_from_vm_memory(vm,overflow_counter_addr);
+            printf("%d\t",global_time);
             print_memory_size(wss);
-            printf("\n");
+            printf("\t%ld\n",counter_value);
+
+
             sample_signal = 0;
+
         }
 
         // Change guest access pattern
         if (change_mem_access_pattern == 1) {
-            if (pattern_index <= num_pattern) {
-                write_to_vm_memory(vm, mem_pattern[pattern_index], mem_access_size_mb_addr);
-                setup_timer(&timer_pattern, SIGUSR2, time_span[pattern_index], 0);
-                pattern_index++;
+            if (workload_current <= workload_entries) {
+                write_to_vm_memory(vm, workload_mem_size[workload_current], mem_access_size_mb_addr);
+                setup_timer(&timer_pattern, SIGUSR2, workload_mem_duration[workload_current], 0);
+                workload_current++;
             }
             change_mem_access_pattern = 0;
         }
 
         if (end_signal == 1) {
-            long counter_value = read_from_vm_memory(vm, overflow_counter_addr);
-            printf("Final counter overflows %ld", counter_value);
             break;
         }
     }
 }
 
 void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu) {
-    printf("Running in 32-bit paged mode\n");
 
     // set special register values
     struct kvm_sregs sregs;
@@ -149,7 +147,25 @@ void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu) {
     run_vm(vm, vcpu);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+
+    if (argc != 6) {
+        printf("Usage: %s <sample_interval> <sample_size> <random_percent> <workload file> <estimation method>\n", argv[0]);
+        return 1;
+    }
+
+    sample_interval = atoi(argv[1]);
+    sample_size = atoi(argv[2]);
+    random_percent = atoi(argv[3]);
+    const char *workload_file = argv[4];
+    estimation_method = atoi(argv[5]);
+
+
+    // command line arguments
+    sample_interval  = 5;
+    sample_size = 100;
+    random_percent = 20;
+    estimation_method = 0;
 
 
     // Initialize VM and VCPU
@@ -158,14 +174,12 @@ int main() {
     vm_init(&vm, memory_size);
     vcpu_init(&vm, &vcpu);
 
-    num_pattern = read_workload("workload1.txt",mem_pattern,time_span);
+    workload_entries = read_workload_from_file(workload_file, workload_mem_size, workload_mem_duration);
+    for(int i =0 ;i < workload_entries; i++)
+        experiment_duration += workload_mem_duration[i];
 
     // Run VM in 32 bit paged mode.
     run_paged_32bit_mode(&vm, &vcpu);
-
-    // check final counter value for performance.
-    long counter_value = *(long *) (vm.mem + overflow_counter_addr);
-    printf("Final counter overflows %ld", counter_value);
 
     return 0;
 }

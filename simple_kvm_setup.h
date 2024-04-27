@@ -213,7 +213,6 @@ void kvm_run_once(struct vm *vm, struct vcpu *vcpu) {
             break;
 
         case KVM_EXIT_INTR:
-            printf("KVM Interrupted \n");
             break;
 
         default:
@@ -246,7 +245,6 @@ void load_binary(struct vm *vm, char *binary_file) {
         p += ret;
         total += ret;
     }
-    printf("Loaded Program with size: %lu\n", total);
 }
 
 #endif //VCC_WORKING_SET_SIMPLE_KVM_SETUP_H
