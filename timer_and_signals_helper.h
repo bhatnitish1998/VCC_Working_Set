@@ -42,6 +42,7 @@ void register_handler() {
     struct sigaction sa;
     sa.sa_sigaction = (void (*)(int, siginfo_t *, void *)) handler;
     sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
     if (sigaction(SIGUSR1, &sa, NULL) == -1 || sigaction(SIGUSR2, &sa, NULL) == -1 ||
         sigaction(SIGALRM, &sa, NULL) == -1)
         perror("sigaction");

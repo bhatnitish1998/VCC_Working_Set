@@ -5,14 +5,36 @@
 
 // Sampling parameters
 int sample_interval = 5;
-uint32_t sample_size = 1000;
+int sample_size = 1000;
+int random_percent;
+bool method;
 
 // workload
-uint32_t mem_pattern[] = {50, 150, 100, 200, 50};
-int time_span[] = {12, 12, 12, 12, 12};
-int num_pattern = 5;
+int mem_pattern[30];
+int time_span[30];
+int num_pattern = 0;
 int pattern_index = 0;
 
+int read_workload(const char *filename, int access_size[], int duration[]) {
+    FILE *file = fopen(filename, "r");
+    if (file == NULL) {
+        printf("Error opening file.\n");
+        return 0;
+    }
+
+    int rows =0;
+    // Skip the first line (header)
+    char line[100];
+    fgets(line, sizeof(line), file);
+
+    // Read the rest of the file
+    while (fscanf(file, "%d %d", &access_size[rows], &duration[rows]) == 2) {
+        rows++;
+    }
+    fclose(file);
+
+    return rows;
+}
 
 size_t get_wss_accessed_bit(struct vm *vm, uint32_t sample_sz) {
     // Calculate ratio of pages access from sample. sampling is done uniformly.
@@ -58,7 +80,7 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
     write_to_vm_memory(vm, mem_pattern[pattern_index], mem_access_size_mb_addr);
     pattern_index++;
 
-    write_to_vm_memory(vm, 100, mem_rand_perc_addr);
+    write_to_vm_memory(vm, random_percent, mem_rand_perc_addr);
 
     while (1) {
         kvm_run_once(vm, vcpu);
@@ -77,6 +99,7 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
         if (change_mem_access_pattern == 1) {
             if (pattern_index <= num_pattern) {
                 write_to_vm_memory(vm, mem_pattern[pattern_index], mem_access_size_mb_addr);
+                setup_timer(&timer_pattern, SIGUSR2, time_span[pattern_index], 0);
                 pattern_index++;
             }
             change_mem_access_pattern = 0;
@@ -128,14 +151,19 @@ void run_paged_32bit_mode(struct vm *vm, struct vcpu *vcpu) {
 
 int main() {
 
+
     // Initialize VM and VCPU
     struct vm vm;
     struct vcpu vcpu;
     vm_init(&vm, memory_size);
     vcpu_init(&vm, &vcpu);
 
+    num_pattern = read_workload("workload1.txt",mem_pattern,time_span);
+
     // Run VM in 32 bit paged mode.
     run_paged_32bit_mode(&vm, &vcpu);
+
+    // check final counter value for performance.
     long counter_value = *(long *) (vm.mem + overflow_counter_addr);
     printf("Final counter overflows %ld", counter_value);
 
