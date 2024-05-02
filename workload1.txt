@@ -4,4 +4,4 @@ Memory (MB) Duration (sec)
 300 4
 50 20
 0 10
-50 18
+50 20

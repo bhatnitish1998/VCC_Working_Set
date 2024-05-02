@@ -19,3 +19,6 @@ Memory (MB) Duration (sec)
 0 4
 50  4
 100 4
+0 4
+50  4
+100 3

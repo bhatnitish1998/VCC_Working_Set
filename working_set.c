@@ -56,7 +56,7 @@ size_t get_wss_invalidation(struct vm *vm, uint32_t sample_sz) {
 void run_vm(struct vm *vm, struct vcpu *vcpu) {
 
     // print header
-    printf("Time\tWSS\tCounter\n");
+    printf("Time\tWSS(MB)\tCounter\n");
 
     register_handler();
 
@@ -87,10 +87,7 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
             // print details
             global_time+=sample_interval;
             long counter_value = read_from_vm_memory(vm,overflow_counter_addr);
-            printf("%d\t",global_time);
-            print_memory_size(wss);
-            printf("\t%ld\n",counter_value);
-
+            printf("%d\t%ld\t%ld\n",global_time,wss/(1024*1024),counter_value);
 
             sample_signal = 0;
 

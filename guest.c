@@ -19,12 +19,13 @@ uint32_t mem_rand_perc_addr = 0xA00008; // Percentage of memory access that shou
 uint32_t overflow_counter_addr = 0xA00010; // To track performance of guest
 
 // memory locations
-long dummy_location = 0xB00000; // Write to prevent compiler optimization (at 11 MB)
+long dummy_location_1 = 0xB00000; // Write to prevent compiler optimization (at 11 MB)
+long dummy_location_2 = 0xB00010;
 long begin = 0x1900000 ; // Start address for contiguous memory test.
 
 // helper functions
 long read_from_memory(uint32_t addr) {
-    long value = *(long *) addr;
+    volatile long value = *(long *) addr;
     return value;
 }
 
@@ -33,12 +34,15 @@ void write_to_memory(long value, uint32_t addr) {
 }
 
 // Increment the counter variable and increase overflow on reaching a million
-int increment_counter(int value) {
+int increment_counter() {
+    volatile long value = read_from_memory(dummy_location_2);
     value++;
+    write_to_memory(value,dummy_location_2);
+
     if (value == 1000000) {
-        long temp = read_from_memory(overflow_counter_addr);
+        volatile long temp = read_from_memory(overflow_counter_addr);
         write_to_memory(temp+1,overflow_counter_addr);
-        value = 0;
+        write_to_memory(0,dummy_location_2);
     }
     return value;
 }
@@ -46,7 +50,7 @@ int increment_counter(int value) {
 int main() {
 
     write_to_memory(0,overflow_counter_addr);
-    int k =0;
+    write_to_memory(0,dummy_location_2);
 
     // infinitely access memory based on parameters.
     while(1)
@@ -76,18 +80,18 @@ int main() {
             long addr = lcg_rand() % 0x20000;
             x = read_from_memory(addr * 0x1000);
             sum += x;
-            k = increment_counter(k);
+            increment_counter();
         }
 
         // access contiguous pages and increment counter
         for (int j = 0; j < contiguous_pages; j++) {
             x = read_from_memory(begin + (j * 0x1000));
             sum += x;
-            k = increment_counter(k);
+            increment_counter();
         }
 
         // write to dummy location to avoid compiler optimization
-        write_to_memory(sum,dummy_location);
+        write_to_memory(sum,dummy_location_1);
     }
 
     return 0;
