@@ -56,7 +56,7 @@ size_t get_wss_invalidation(struct vm *vm, uint32_t sample_sz) {
 void run_vm(struct vm *vm, struct vcpu *vcpu) {
 
     // print header
-    printf("Time\tWSS(MB)\tCounter\n");
+    printf("Time\tWSS(MB)\n");
 
     register_handler();
 
@@ -70,6 +70,10 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
     write_to_vm_memory(vm, workload_mem_size[workload_current], mem_access_size_mb_addr);
     workload_current++;
     write_to_vm_memory(vm, random_percent, mem_rand_perc_addr);
+
+    if (estimation_method == 1) {
+        size_t temp = get_wss_invalidation(vm, sample_size);
+    }
 
     while (1) {
         kvm_run_once(vm, vcpu);
@@ -87,7 +91,7 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
             // print details
             global_time+=sample_interval;
             long counter_value = read_from_vm_memory(vm,overflow_counter_addr);
-            printf("%d\t%ld\t%ld\n",global_time,wss/(1024*1024),counter_value);
+            printf("%d\t%ld\n",global_time,wss/(1024*1024));
 
             sample_signal = 0;
 
@@ -104,6 +108,9 @@ void run_vm(struct vm *vm, struct vcpu *vcpu) {
         }
 
         if (end_signal == 1) {
+            long counter_value = read_from_vm_memory(vm,overflow_counter_addr);
+            printf("Time\tCounter\n");
+            printf("%d\t%ld\n",experiment_duration,counter_value);
             break;
         }
     }
