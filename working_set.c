@@ -161,13 +161,6 @@ int main(int argc, char *argv[]) {
     estimation_method = atoi(argv[5]);
 
 
-    // command line arguments
-    sample_interval  = 5;
-    sample_size = 100;
-    random_percent = 20;
-    estimation_method = 0;
-
-
     // Initialize VM and VCPU
     struct vm vm;
     struct vcpu vcpu;
