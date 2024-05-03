@@ -5,12 +5,12 @@ The project calculates the working set size of a VM executing different memory w
 ### Running the code
 
 1.  **make**
-2.  **./working_set <sample_interval> <sample_size> <random_percent> <workload file> <estimation method>**
+2.  **./working_set <sample_interval> <sample_size> <random_percent> <workload_file> <estimation_method>**
     - **sample_interval**: The duration in seconds between each sampling.
-    - **sample_size**: Number of pages used for sampling
+    - **sample_size**: Number of pages used for sampling.
     - **random_percent**: The percentage of memory access in guest to be random. Ex 20% indicates that guest access 20% of its memory randomly and remaining 80% is accessed contiguously
-    - **workload file**: the path to the text file containing workload. The file should have two columns with first column indicating memory size and second column indicating the duration for which the guest should access that memory.
-    - **estimation_method**: 0 for access bit based method and 1 for page invalidation method. (Methods described below)
+    - **workload_file**: the path to the text file containing workload. The file should have two columns with first column indicating memory size and second column indicating the duration for which the guest should access that memory.
+    - **estimation_method**: 0 for access bit based method and 1 for page invalidation method. (Methods described below).
 
 &nbsp;
 
